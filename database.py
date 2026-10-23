@@ -190,3 +190,35 @@ def get_active_subscribers() -> List[Dict[str, Any]]:
         cursor.execute("SELECT * FROM subscribers WHERE is_active = 1")
         rows = cursor.fetchall()
         return [dict(r) for r in rows]
+
+def get_stats() -> Dict[str, Any]:
+    """Retrieve subscriber statistics."""
+    init_db()
+    with get_connection() as conn:
+        cursor = conn.cursor()
+        cursor.execute("SELECT COUNT(*) FROM subscribers")
+        total = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(*) FROM subscribers WHERE is_active = 1")
+        active = cursor.fetchone()[0]
+
+        cursor.execute("SELECT COUNT(*) FROM subscribers WHERE is_active = 0")
+        inactive = cursor.fetchone()[0]
+
+        cursor.execute("SELECT frequency, COUNT(*) FROM subscribers WHERE is_active = 1 GROUP BY frequency")
+        by_freq = dict(cursor.fetchall())
+
+        cursor.execute("SELECT preferred_time, COUNT(*) FROM subscribers WHERE is_active = 1 GROUP BY preferred_time")
+        by_time = dict(cursor.fetchall())
+
+        cursor.execute("SELECT chat_id, username, first_name, is_active, frequency, preferred_time, created_at FROM subscribers ORDER BY created_at DESC LIMIT 20")
+        recent = [dict(r) for r in cursor.fetchall()]
+
+        return {
+            "total": total,
+            "active": active,
+            "inactive": inactive,
+            "by_frequency": by_freq,
+            "by_time": by_time,
+            "recent": recent,
+        }

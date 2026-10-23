@@ -8,9 +8,11 @@ Subscribers can configure their own personalized filters directly in Telegram ch
 
 ## 🌟 Key Features
 
-1. **User Welcome (`/start`)**:
+1. **Flexible, Case-Insensitive Command Execution**:
+   - All commands are completely **case-insensitive** and can be run with standard slashes (`/`), backward slashes (`\`), or **directly without any slash** (e.g. `check`, `CHECK`, `/check`, `\check`, `mingmp 20`, `START`).
+2. **User Welcome (`/start` or `start`)**:
    - Clean, friendly introduction explaining what the bot does without overwhelming the user.
-2. **Subscribers Management (`/add` and `/remove`)**:
+3. **Subscribers Management (`/add` and `/remove` / `stop`)**:
    - `/add`: Subscribes the user, registers their chat ID into an SQLite database (`subscribers.db`), and presents a comprehensive configuration guide.
    - `/remove`: Unsubscribes the user from automated alerts.
 3. **Per-User Persistent Filters**:

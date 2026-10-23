@@ -11,9 +11,10 @@ from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
     ApplicationBuilder,
-    CommandHandler,
+    BaseHandler,
     ContextTypes,
 )
+
 
 import config
 import database
@@ -31,6 +32,63 @@ logging.basicConfig(
     level=logging.INFO,
 )
 logger = logging.getLogger("IPOBot")
+
+
+class FlexibleCommandHandler(BaseHandler):
+    """
+    Custom handler allowing commands to:
+    1. Be case-insensitive (e.g., /start, /START, start, START).
+    2. Run with or without slashes (forward slash '/' or backward slash '\\').
+    3. Support optional bot username mentions (@BotUsername).
+    4. Populate context.args properly for parameterized commands.
+    """
+
+    def __init__(self, command: Any, callback: Any):
+        super().__init__(callback)
+        if isinstance(command, str):
+            self.commands = {command.lower()}
+        else:
+            self.commands = {c.lower() for c in command}
+
+    def check_update(self, update: object):
+        if not isinstance(update, Update) or not update.effective_message:
+            return None
+        text = update.effective_message.text or update.effective_message.caption
+        if not text:
+            return None
+        parts = text.strip().split()
+        if not parts:
+            return None
+        raw_cmd = parts[0]
+        # Strip any leading slashes (forward slash '/' or backward slash '\\')
+        clean_cmd = raw_cmd.lstrip("/\\")
+        if not clean_cmd:
+            return None
+        cmd_name, _, mention = clean_cmd.partition("@")
+        cmd_name = cmd_name.lower()
+
+        if mention and update.get_bot():
+            try:
+                bot_user = update.get_bot().username
+                if bot_user and mention.lower() != bot_user.lower():
+                    return None
+            except Exception:
+                pass
+
+        if cmd_name in self.commands:
+            args = parts[1:]
+            return (args, True)
+        return None
+
+    def collect_additional_context(
+        self,
+        context: ContextTypes.DEFAULT_TYPE,
+        update: Update,
+        application: Application,
+        check_result: Any,
+    ) -> None:
+        if isinstance(check_result, tuple):
+            context.args = check_result[0]
 
 
 def get_or_register_user(update: Update) -> Dict[str, Any]:
@@ -500,6 +558,7 @@ async def myfilters_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
 async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     text = (
         "📖 <b>IPO Bot Command Directory:</b>\n\n"
+        "💡 <i>All commands are case-insensitive and can be run with <code>/</code>, <code>\\</code>, or directly without any slash (e.g. <code>check</code>, <code>CHECK</code>, <code>/check</code>, or <code>\\check</code>).</i>\n\n"
         "<b>Core Actions:</b>\n"
         "• /start — Welcome & Bot introduction\n"
         "• /add — Subscribe & view all filter settings\n"
@@ -520,9 +579,9 @@ async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
         "• /sme — SME only\n"
         "• /both — Both Mainboard and SME\n\n"
         "<b>Numeric Filters:</b>\n"
-        "• /mingmp &lt;pct&gt; — Minimum GMP % (e.g. <code>/mingmp 20</code>)\n"
-        "• /mintotal &lt;x&gt; — Minimum Total Subscription (e.g. <code>/mintotal 2</code>)\n"
-        "• /minretail &lt;x&gt; — Minimum Retail Subscription (e.g. <code>/minretail 1.5</code>)\n\n"
+        "• /mingmp &lt;pct&gt; — Minimum GMP % (e.g. <code>/mingmp 20</code> or <code>mingmp 20</code>)\n"
+        "• /mintotal &lt;x&gt; — Minimum Total Subscription (e.g. <code>/mintotal 2</code> or <code>mintotal 2</code>)\n"
+        "• /minretail &lt;x&gt; — Minimum Retail Subscription (e.g. <code>/minretail 1.5</code> or <code>minretail 1.5</code>)\n\n"
         "<b>Display:</b>\n"
         "• /format &lt;card|table&gt; — Card or table layout\n"
         "• /columns &lt;cols&gt; — Select custom columns\n"
@@ -721,6 +780,11 @@ async def broadcast_loop(application: Application):
 async def triggersend_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Admin/Test command to instantly test the scheduled dispatch without waiting for 6 AM / 6 PM."""
     chat_id = update.effective_chat.id
+    owner_id = str(config.TELEGRAM_CHAT_ID).strip()
+    if owner_id and str(chat_id) != owner_id:
+        await update.message.reply_text("⛔ This command is restricted to the bot owner.")
+        return
+
     sub = database.get_subscriber(chat_id)
     slot = "morning"
     if context.args and context.args[0].lower() in ["morning", "evening"]:
@@ -735,6 +799,40 @@ async def triggersend_command(update: Update, context: ContextTypes.DEFAULT_TYPE
     )
     # Temporarily bypass frequency restriction for test trigger
     await dispatch_scheduled_batch(context.application, slot, now.date())
+
+
+async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    """Owner command to view user counts and subscription statistics."""
+    chat_id = update.effective_chat.id
+    owner_id = str(config.TELEGRAM_CHAT_ID).strip()
+    if owner_id and str(chat_id) != owner_id:
+        await update.message.reply_text("⛔ This command is restricted to the bot owner.")
+        return
+
+    stats = database.get_stats()
+    text = (
+        "📊 <b>IPO Bot Subscriber Statistics:</b>\n\n"
+        f"👥 <b>Total Tracked Users:</b> <code>{stats['total']}</code>\n"
+        f"🟢 <b>Active Subscribers (via /add):</b> <code>{stats['active']}</code>\n"
+        f"🔴 <b>Unsubscribed Users (via /remove):</b> <code>{stats['inactive']}</code>\n\n"
+        "⏰ <b>Active Delivery Preferences:</b>\n"
+        f"• Morning (06:00 AM): <code>{stats['by_time'].get('morning', 0)}</code>\n"
+        f"• Evening (06:00 PM): <code>{stats['by_time'].get('evening', 0)}</code>\n\n"
+        "📅 <b>Active Frequency Preferences:</b>\n"
+        f"• Daily: <code>{stats['by_frequency'].get('daily', 0)}</code>\n"
+        f"• Alternate: <code>{stats['by_frequency'].get('alternate', 0)}</code>\n"
+        f"• Every 3rd Day: <code>{stats['by_frequency'].get('thirdday', 0)}</code>\n"
+    )
+
+    if stats["recent"]:
+        text += "\n👤 <b>Recent Users:</b>\n"
+        for u in stats["recent"][:10]:
+            name = u.get("first_name") or "User"
+            uname = f" (@{u['username']})" if u.get("username") else ""
+            status = "🟢 Active" if u.get("is_active") else "🔴 Inactive"
+            text += f"• {status} — <b>{name}</b>{uname} [<code>{u['chat_id']}</code>]\n"
+
+    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
 
 
 async def on_startup(application: Application):
@@ -758,42 +856,39 @@ def main():
     app = ApplicationBuilder().token(token).post_init(on_startup).build()
 
     # Core commands
-    app.add_handler(CommandHandler("start", start_command))
-    app.add_handler(CommandHandler("add", add_command))
-    app.add_handler(CommandHandler("remove", remove_command))
-    app.add_handler(CommandHandler("stop", remove_command))
+    app.add_handler(FlexibleCommandHandler("start", start_command))
+    app.add_handler(FlexibleCommandHandler("add", add_command))
+    app.add_handler(FlexibleCommandHandler(["remove", "stop"], remove_command))
 
     # Frequency & Delivery Time
-    app.add_handler(CommandHandler("daily", daily_command))
-    app.add_handler(CommandHandler("alternate", alternate_command))
-    app.add_handler(CommandHandler("thirdday", thirdday_command))
-    app.add_handler(CommandHandler("morning", morning_command))
-    app.add_handler(CommandHandler("evening", evening_command))
+    app.add_handler(FlexibleCommandHandler("daily", daily_command))
+    app.add_handler(FlexibleCommandHandler("alternate", alternate_command))
+    app.add_handler(FlexibleCommandHandler("thirdday", thirdday_command))
+    app.add_handler(FlexibleCommandHandler("morning", morning_command))
+    app.add_handler(FlexibleCommandHandler("evening", evening_command))
 
     # Scope & Category
-    app.add_handler(CommandHandler("open", open_command))
-    app.add_handler(CommandHandler("all", all_command))
-    app.add_handler(CommandHandler("closing", closing_command))
-    app.add_handler(CommandHandler("sme", sme_command))
-    app.add_handler(CommandHandler("mainboard", mainboard_command))
-    app.add_handler(CommandHandler("both", both_command))
+    app.add_handler(FlexibleCommandHandler("open", open_command))
+    app.add_handler(FlexibleCommandHandler("all", all_command))
+    app.add_handler(FlexibleCommandHandler("closing", closing_command))
+    app.add_handler(FlexibleCommandHandler("sme", sme_command))
+    app.add_handler(FlexibleCommandHandler("mainboard", mainboard_command))
+    app.add_handler(FlexibleCommandHandler("both", both_command))
 
     # Numeric thresholds
-    app.add_handler(CommandHandler("mingmp", mingmp_command))
-    app.add_handler(CommandHandler("mintotal", mintotal_command))
-    app.add_handler(CommandHandler("minretail", minretail_command))
+    app.add_handler(FlexibleCommandHandler("mingmp", mingmp_command))
+    app.add_handler(FlexibleCommandHandler("mintotal", mintotal_command))
+    app.add_handler(FlexibleCommandHandler("minretail", minretail_command))
 
     # Display & Column Selection
-    app.add_handler(CommandHandler("format", format_command))
-    app.add_handler(CommandHandler("columns", columns_command))
+    app.add_handler(FlexibleCommandHandler("format", format_command))
+    app.add_handler(FlexibleCommandHandler("columns", columns_command))
 
     # Inspection & Testing
-    app.add_handler(CommandHandler("myfilters", myfilters_command))
-    app.add_handler(CommandHandler("settings", myfilters_command))
-    app.add_handler(CommandHandler("check", check_command))
-    app.add_handler(CommandHandler("now", check_command))
-    app.add_handler(CommandHandler("triggersend", triggersend_command))
-    app.add_handler(CommandHandler("help", help_command))
+    app.add_handler(FlexibleCommandHandler(["myfilters", "settings"], myfilters_command))
+    app.add_handler(FlexibleCommandHandler(["check", "now"], check_command))
+    app.add_handler(FlexibleCommandHandler("triggersend", triggersend_command))
+    app.add_handler(FlexibleCommandHandler("help", help_command))
 
     print("[+] Handlers registered. Starting continuous long polling...")
     app.run_polling()
