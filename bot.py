@@ -2,6 +2,7 @@ import sys
 sys.stdout.reconfigure(encoding="utf-8")
 
 import asyncio
+import html
 import logging
 from datetime import datetime
 from typing import List, Dict, Any
@@ -803,36 +804,46 @@ async def triggersend_command(update: Update, context: ContextTypes.DEFAULT_TYPE
 
 async def stats_command(update: Update, context: ContextTypes.DEFAULT_TYPE):
     """Owner command to view user counts and subscription statistics."""
-    chat_id = update.effective_chat.id
-    owner_id = str(config.TELEGRAM_CHAT_ID).strip()
-    if owner_id and str(chat_id) != owner_id:
-        await update.message.reply_text("⛔ This command is restricted to the bot owner.")
-        return
+    try:
+        chat_id = update.effective_chat.id if update.effective_chat else None
+        user_id = update.effective_user.id if update.effective_user else None
+        owner_id = str(config.TELEGRAM_CHAT_ID).strip() if config.TELEGRAM_CHAT_ID else ""
 
-    stats = database.get_stats()
-    text = (
-        "📊 <b>IPO Bot Subscriber Statistics:</b>\n\n"
-        f"👥 <b>Total Tracked Users:</b> <code>{stats['total']}</code>\n"
-        f"🟢 <b>Active Subscribers (via /add):</b> <code>{stats['active']}</code>\n"
-        f"🔴 <b>Unsubscribed Users (via /remove):</b> <code>{stats['inactive']}</code>\n\n"
-        "⏰ <b>Active Delivery Preferences:</b>\n"
-        f"• Morning (06:00 AM): <code>{stats['by_time'].get('morning', 0)}</code>\n"
-        f"• Evening (06:00 PM): <code>{stats['by_time'].get('evening', 0)}</code>\n\n"
-        "📅 <b>Active Frequency Preferences:</b>\n"
-        f"• Daily: <code>{stats['by_frequency'].get('daily', 0)}</code>\n"
-        f"• Alternate: <code>{stats['by_frequency'].get('alternate', 0)}</code>\n"
-        f"• Every 3rd Day: <code>{stats['by_frequency'].get('thirdday', 0)}</code>\n"
-    )
+        logger.info(f"Stats command received from chat_id={chat_id}, user_id={user_id} (Configured owner_id={owner_id})")
 
-    if stats["recent"]:
-        text += "\n👤 <b>Recent Users:</b>\n"
-        for u in stats["recent"][:10]:
-            name = u.get("first_name") or "User"
-            uname = f" (@{u['username']})" if u.get("username") else ""
-            status = "🟢 Active" if u.get("is_active") else "🔴 Inactive"
-            text += f"• {status} — <b>{name}</b>{uname} [<code>{u['chat_id']}</code>]\n"
+        # Restrict to owner if TELEGRAM_CHAT_ID is set
+        if owner_id and str(chat_id) != owner_id and str(user_id) != owner_id:
+            logger.warning(f"Unauthorized /stats attempt by user_id: {user_id}, chat_id: {chat_id}")
+            await update.message.reply_text("⛔ This command is restricted to the bot owner.")
+            return
 
-    await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+        stats = database.get_stats()
+        text = (
+            "📊 <b>IPO Bot Subscriber Statistics:</b>\n\n"
+            f"👥 <b>Total Tracked Users:</b> <code>{stats['total']}</code>\n"
+            f"🟢 <b>Active Subscribers (via /add):</b> <code>{stats['active']}</code>\n"
+            f"🔴 <b>Unsubscribed Users (via /remove):</b> <code>{stats['inactive']}</code>\n\n"
+            "⏰ <b>Active Delivery Preferences:</b>\n"
+            f"• Morning (06:00 AM): <code>{stats['by_time'].get('morning', 0)}</code>\n"
+            f"• Evening (06:00 PM): <code>{stats['by_time'].get('evening', 0)}</code>\n\n"
+            "📅 <b>Active Frequency Preferences:</b>\n"
+            f"• Daily: <code>{stats['by_frequency'].get('daily', 0)}</code>\n"
+            f"• Alternate: <code>{stats['by_frequency'].get('alternate', 0)}</code>\n"
+            f"• Every 3rd Day: <code>{stats['by_frequency'].get('thirdday', 0)}</code>\n"
+        )
+
+        if stats["recent"]:
+            text += "\n👤 <b>Recent Users:</b>\n"
+            for u in stats["recent"][:15]:
+                name = html.escape(str(u.get("first_name") or "User"))
+                uname = f" (@{html.escape(str(u['username']))})" if u.get("username") else ""
+                status = "🟢 Active" if u.get("is_active") else "🔴 Inactive"
+                text += f"• {status} — <b>{name}</b>{uname} [<code>{u['chat_id']}</code>]\n"
+
+        await update.message.reply_text(text, parse_mode=ParseMode.HTML)
+    except Exception as e:
+        logger.error(f"Error handling stats_command: {e}", exc_info=True)
+        await update.message.reply_text(f"⚠️ Error fetching stats: {e}")
 
 
 async def on_startup(application: Application):
@@ -888,6 +899,7 @@ def main():
     app.add_handler(FlexibleCommandHandler(["myfilters", "settings"], myfilters_command))
     app.add_handler(FlexibleCommandHandler(["check", "now"], check_command))
     app.add_handler(FlexibleCommandHandler("triggersend", triggersend_command))
+    app.add_handler(FlexibleCommandHandler(["stats", "users", "subscribers"], stats_command))
     app.add_handler(FlexibleCommandHandler("help", help_command))
 
     print("[+] Handlers registered. Starting continuous long polling...")
